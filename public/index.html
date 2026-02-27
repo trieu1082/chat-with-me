@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>PMT Chat</title>
+  <style>
+    body{margin:0;background:#0b0b10;color:#eaeaf2;font-family:system-ui}
+    .wrap{max-width:920px;margin:0 auto;height:100vh;display:flex;flex-direction:column}
+    .top{padding:12px 14px;border-bottom:1px solid #222;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .pill{background:#171723;border:1px solid #2a2a3a;border-radius:10px;padding:8px 10px}
+    .btn{cursor:pointer;user-select:none}
+    .msgs{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+    .m{padding:10px 12px;background:#141420;border:1px solid #22223a;border-radius:12px}
+    .u{font-weight:700;color:#bda6ff}
+    .t{opacity:.9;white-space:pre-wrap;word-break:break-word}
+    .bar{display:flex;gap:10px;padding:12px 14px;border-top:1px solid #222}
+    input{flex:1;background:#10101a;border:1px solid #2a2a3a;border-radius:10px;padding:12px;color:#fff;outline:none}
+    button{background:#7c4dff;border:none;color:#fff;border-radius:10px;padding:12px 14px;font-weight:700}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="pill">Room: <b id="room">global</b></div>
+    <div class="pill">Me: <b id="me">?</b></div>
+    <div class="pill btn" id="guest">Guest</div>
+    <div class="pill btn" id="register">Register</div>
+    <div class="pill btn" id="login">Login</div>
+  </div>
+  <div class="msgs" id="msgs"></div>
+  <div class="bar">
+    <input id="txt" placeholder="Type message... (?ban/?mute owner only)"/>
+    <button id="send">Send</button>
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
