@@ -6,34 +6,45 @@
   <title>PMT Chat</title>
   <style>
     body{margin:0;background:#0b0b10;color:#eaeaf2;font-family:system-ui}
-    .wrap{max-width:920px;margin:0 auto;height:100vh;display:flex;flex-direction:column}
-    .top{padding:12px 14px;border-bottom:1px solid #222;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .wrap{max-width:980px;margin:0 auto;height:100vh;display:flex;flex-direction:column}
+    .top{padding:12px 14px;border-bottom:1px solid #222;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
     .pill{background:#171723;border:1px solid #2a2a3a;border-radius:10px;padding:8px 10px}
     .btn{cursor:pointer;user-select:none}
     .msgs{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
     .m{padding:10px 12px;background:#141420;border:1px solid #22223a;border-radius:12px}
-    .u{font-weight:700;color:#bda6ff}
-    .t{opacity:.9;white-space:pre-wrap;word-break:break-word}
+    .u{font-weight:800;color:#bda6ff;margin-bottom:2px}
+    .t{opacity:.92;white-space:pre-wrap;word-break:break-word;line-height:1.35}
     .bar{display:flex;gap:10px;padding:12px 14px;border-top:1px solid #222}
     input{flex:1;background:#10101a;border:1px solid #2a2a3a;border-radius:10px;padding:12px;color:#fff;outline:none}
-    button{background:#7c4dff;border:none;color:#fff;border-radius:10px;padding:12px 14px;font-weight:700}
+    button{background:#7c4dff;border:none;color:#fff;border-radius:10px;padding:12px 14px;font-weight:800}
+    .pin{background:#10101a;border:1px solid #2a2a3a;border-radius:10px;padding:10px 12px;display:none;max-width:980px;margin:12px 14px 0 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .msg.h1{font-size:18px;font-weight:900}
+    .msg.h2{font-size:16px;font-weight:900}
+    .spoiler{background:#2a2a3a;color:transparent;border-radius:6px;padding:0 6px;cursor:pointer;user-select:none}
+    .spoiler.reveal{color:#eaeaf2}
+    .meta{opacity:.55;font-size:12px;margin-left:6px}
   </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="top">
-    <div class="pill">Room: <b id="room">global</b></div>
-    <div class="pill">Me: <b id="me">?</b></div>
-    <div class="pill btn" id="guest">Guest</div>
-    <div class="pill btn" id="register">Register</div>
-    <div class="pill btn" id="login">Login</div>
+  <div class="wrap">
+    <div class="top">
+      <div class="pill">Room: <b id="room">global</b></div>
+      <div class="pill">Me: <b id="me">...</b></div>
+      <div class="pill btn" id="logout">Logout</div>
+      <div class="pill btn" id="login">Login</div>
+      <div class="pill btn" id="register">Register</div>
+    </div>
+
+    <div class="pin" id="pinBox"></div>
+
+    <div class="msgs" id="msgs"></div>
+
+    <div class="bar">
+      <input id="txt" placeholder="Type message... (<sủa đê>)"/>
+      <button id="send">Send</button>
+    </div>
   </div>
-  <div class="msgs" id="msgs"></div>
-  <div class="bar">
-    <input id="txt" placeholder="Type message... (?ban/?mute owner only)"/>
-    <button id="send">Send</button>
-  </div>
-</div>
-<script src="/app.js"></script>
+
+  <script src="/app.js"></script>
 </body>
 </html>
