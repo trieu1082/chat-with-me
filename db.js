@@ -3,7 +3,6 @@ import Database from "better-sqlite3";
 export function openDB(path = process.env.DB_PATH || "./data.sqlite") {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
-
   db.exec(`
     CREATE TABLE IF NOT EXISTS users(
       id TEXT PRIMARY KEY,
@@ -44,8 +43,15 @@ export function openDB(path = process.env.DB_PATH || "./data.sqlite") {
       created_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS pins(
+      room TEXT PRIMARY KEY,
+      message_id INTEGER,
+      content TEXT,
+      username TEXT,
+      pinned_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_msg_room_time ON messages(room, created_at);
   `);
-
   return db;
 }
