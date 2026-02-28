@@ -16,14 +16,12 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "256kb" }));
 
-const limiter = rateLimit({ windowMs: 5_000, max: 30 });
-app.use("/api/", limiter);
+app.use("/api/", rateLimit({ windowMs: 5000, max: 40 }));
 
 const db = openDB(process.env.DB_PATH || "./data.sqlite");
 
 const now = () => Date.now();
 const SESSION_TTL_MS = (parseInt(process.env.SESSION_TTL_SEC || "2592000", 10) || 2592000) * 1000;
-
 const OWNER_USER = process.env.OWNER_USER || "owner";
 const OWNER_PASS = process.env.OWNER_PASS || "owner123";
 
@@ -74,14 +72,14 @@ function isMuted(userId) {
 
 function findUser(q) {
   const s = String(q || "").replace(/^@/, "").trim();
-  let u = db.prepare(`SELECT id, username, role FROM users WHERE id=?`).get(s);
-  if (u) return u;
-  u = db.prepare(`SELECT id, username, role FROM users WHERE username=?`).get(s);
-  return u || null;
+  return (
+    db.prepare(`SELECT id, username, role FROM users WHERE id=?`).get(s) ||
+    db.prepare(`SELECT id, username, role FROM users WHERE username=?`).get(s) ||
+    null
+  );
 }
 
-// ---- realtime rooms ----
-const rooms = new Map(); // room -> Set(ws)
+const rooms = new Map();
 function roomSet(room) {
   if (!rooms.has(room)) rooms.set(room, new Set());
   return rooms.get(room);
@@ -94,19 +92,20 @@ function broadcast(room, payload) {
   }
 }
 
-// ---- API ----
 app.post("/api/auth/guest", (req, res) => {
-  const username = String(req.body?.username || `Guest${Math.floor(Math.random()*9000+1000)}`).slice(0, 18);
+  let username = String(req.body?.username || `Guest${Math.floor(Math.random() * 9000 + 1000)}`).slice(0, 18).trim();
+  if (username.length < 3) username = `Guest${Math.floor(Math.random() * 9000 + 1000)}`;
+
   const id = nanoid(24);
   try {
     db.prepare(`INSERT INTO users(id,username,pass_hash,role,created_at) VALUES(?,?,?,?,?)`)
       .run(id, username, null, "user", now());
   } catch {
-    // nếu trùng username, thêm suffix
-    const u2 = (username + "_" + Math.floor(Math.random()*999)).slice(0, 18);
+    username = (username + "_" + Math.floor(Math.random() * 999)).slice(0, 18);
     db.prepare(`INSERT INTO users(id,username,pass_hash,role,created_at) VALUES(?,?,?,?,?)`)
-      .run(id, u2, null, "user", now());
+      .run(id, username, null, "user", now());
   }
+
   const token = newSession(id);
   res.json({ ok: true, token, user: { id, username, role: "user" } });
 });
@@ -114,7 +113,7 @@ app.post("/api/auth/guest", (req, res) => {
 app.post("/api/auth/register", (req, res) => {
   const username = String(req.body?.username || "").trim().slice(0, 18);
   const password = String(req.body?.password || "");
-  if (username.length < 3 || password.length < 6) return res.status(400).json({ ok:false, err:"bad-input" });
+  if (username.length < 3 || password.length < 6) return res.status(400).json({ ok: false, err: "bad-input" });
 
   const id = nanoid(24);
   const pass_hash = bcrypt.hashSync(password, 10);
@@ -122,125 +121,166 @@ app.post("/api/auth/register", (req, res) => {
     db.prepare(`INSERT INTO users(id,username,pass_hash,role,created_at) VALUES(?,?,?,?,?)`)
       .run(id, username, pass_hash, "user", now());
   } catch {
-    return res.status(409).json({ ok:false, err:"username-taken" });
+    return res.status(409).json({ ok: false, err: "username-taken" });
   }
+
   const token = newSession(id);
-  res.json({ ok:true, token, user:{ id, username, role:"user" } });
+  res.json({ ok: true, token, user: { id, username, role: "user" } });
 });
 
 app.post("/api/auth/login", (req, res) => {
   const username = String(req.body?.username || "").trim();
   const password = String(req.body?.password || "");
   const u = db.prepare(`SELECT id, username, pass_hash, role FROM users WHERE username=?`).get(username);
-  if (!u || !u.pass_hash) return res.status(401).json({ ok:false, err:"bad-cred" });
-  if (!bcrypt.compareSync(password, u.pass_hash)) return res.status(401).json({ ok:false, err:"bad-cred" });
+  if (!u || !u.pass_hash) return res.status(401).json({ ok: false, err: "bad-cred" });
+  if (!bcrypt.compareSync(password, u.pass_hash)) return res.status(401).json({ ok: false, err: "bad-cred" });
 
   const ban = db.prepare(`SELECT banned_until FROM bans WHERE user_id=?`).get(u.id);
-  if (ban && (ban.banned_until == null || ban.banned_until > now())) return res.status(403).json({ ok:false, err:"banned" });
+  if (ban && (ban.banned_until == null || ban.banned_until > now())) return res.status(403).json({ ok: false, err: "banned" });
 
   const token = newSession(u.id);
-  res.json({ ok:true, token, user:{ id:u.id, username:u.username, role:u.role } });
+  res.json({ ok: true, token, user: { id: u.id, username: u.username, role: u.role } });
 });
 
 app.get("/api/me", (req, res) => {
   const me = getAuth(req);
-  if (!me) return res.status(401).json({ ok:false });
-  res.json({ ok:true, me:{ userId: me.userId, username: me.username, role: me.role } });
+  if (!me) return res.status(401).json({ ok: false, err: "no-auth" });
+  res.json({ ok: true, me: { userId: me.userId, username: me.username, role: me.role } });
+});
+
+app.get("/api/room/:room/pinned", (req, res) => {
+  const me = getAuth(req);
+  if (!me) return res.status(401).json({ ok: false, err: "no-auth" });
+
+  const room = String(req.params.room || "global").slice(0, 32);
+  const pin = db.prepare(`SELECT room, message_id, content, username, pinned_at FROM pins WHERE room=?`).get(room) || null;
+  res.json({ ok: true, pin });
 });
 
 app.post("/api/room/:room/send", (req, res) => {
   const me = getAuth(req);
-  if (!me) return res.status(401).json({ ok:false, err:"no-auth" });
+  if (!me) return res.status(401).json({ ok: false, err: "no-auth" });
 
-  const room = String(req.params.room || "global");
+  const room = String(req.params.room || "global").slice(0, 32);
   const mutedUntil = isMuted(me.userId);
-  if (mutedUntil) return res.status(403).json({ ok:false, err:"muted", until: mutedUntil });
+  if (mutedUntil) return res.status(403).json({ ok: false, err: "muted", until: mutedUntil });
 
   let content = String(req.body?.content || "").trim();
-  if (!content) return res.status(400).json({ ok:false, err:"empty" });
+  if (!content) return res.status(400).json({ ok: false, err: "empty" });
   if (content.length > 300) content = content.slice(0, 300);
 
-  // owner commands
   if (content.startsWith("?")) {
-    if (me.role !== "owner") return res.json({ ok:true, cmd:true });
+    if (me.role !== "owner") return res.json({ ok: true, cmd: true });
 
-    const [cmd, targetRaw, arg2] = content.trim().split(/\s+/);
-    const target = targetRaw || "";
-    if (!target) return res.json({ ok:true, cmd:true });
+    const parts = content.trim().split(/\s+/);
+    const cmd = (parts[0] || "").toLowerCase();
+    const a1 = parts[1] || "";
+    const a2 = parts[2] || "";
+
+    if (cmd === "?pin") {
+      const id = parseInt(a1 || "0", 10);
+      if (!id) return res.json({ ok: true, cmd: true });
+
+      const m = db.prepare(`SELECT id, username, content, created_at FROM messages WHERE room=? AND id=?`).get(room, id);
+      if (!m) return res.json({ ok: true, cmd: true });
+
+      const p = { room, message_id: m.id, content: m.content, username: m.username, pinned_at: now() };
+      db.prepare(`
+        INSERT INTO pins(room,message_id,content,username,pinned_at) VALUES(?,?,?,?,?)
+        ON CONFLICT(room) DO UPDATE SET message_id=excluded.message_id, content=excluded.content, username=excluded.username, pinned_at=excluded.pinned_at
+      `).run(p.room, p.message_id, p.content, p.username, p.pinned_at);
+
+      broadcast(room, { type: "pin", pin: p });
+      return res.json({ ok: true, cmd: true });
+    }
+
+    if (cmd === "?unpin") {
+      db.prepare(`DELETE FROM pins WHERE room=?`).run(room);
+      broadcast(room, { type: "pin", pin: null });
+      return res.json({ ok: true, cmd: true });
+    }
+
+    const target = a1 || "";
+    if (!target) return res.json({ ok: true, cmd: true });
 
     const u = findUser(target);
     if (!u) {
-      db.prepare(`INSERT INTO messages(room,user_id,username,content,created_at) VALUES(?,?,?,?,?)`)
-        .run(room, "system", "SYSTEM", "Không thấy user.", now());
-      broadcast(room, { t: now(), username:"SYSTEM", content:"Không thấy user." });
-      return res.json({ ok:true, cmd:true });
+      const msg = "Không thấy user.";
+      const ins = db.prepare(`INSERT INTO messages(room,user_id,username,content,created_at) VALUES(?,?,?,?,?)`)
+        .run(room, "system", "SYSTEM", msg, now());
+      broadcast(room, { type: "msg", id: Number(ins.lastInsertRowid), created_at: now(), username: "SYSTEM", content: msg });
+      return res.json({ ok: true, cmd: true });
     }
-    if (u.role === "owner") return res.json({ ok:true, cmd:true });
+    if (u.role === "owner") return res.json({ ok: true, cmd: true });
 
     if (cmd === "?mute") {
-      const sec = Math.max(5, Math.min(7*24*3600, parseInt(arg2 || "60",10) || 60));
-      const until = now() + sec*1000;
+      const sec = Math.max(5, Math.min(7 * 24 * 3600, parseInt(a2 || "60", 10) || 60));
+      const until = now() + sec * 1000;
       db.prepare(`
         INSERT INTO mutes(user_id,muted_until,reason,created_at) VALUES(?,?,?,?)
         ON CONFLICT(user_id) DO UPDATE SET muted_until=excluded.muted_until, reason=excluded.reason
       `).run(u.id, until, "muted", now());
 
       const msg = `Đã mute ${u.username} ${sec}s.`;
-      db.prepare(`INSERT INTO messages(room,user_id,username,content,created_at) VALUES(?,?,?,?,?)`)
+      const ins = db.prepare(`INSERT INTO messages(room,user_id,username,content,created_at) VALUES(?,?,?,?,?)`)
         .run(room, "system", "SYSTEM", msg, now());
-      broadcast(room, { t: now(), username:"SYSTEM", content: msg });
-      return res.json({ ok:true, cmd:true });
+      broadcast(room, { type: "msg", id: Number(ins.lastInsertRowid), created_at: now(), username: "SYSTEM", content: msg });
+      return res.json({ ok: true, cmd: true });
     }
 
     if (cmd === "?unmute") {
       db.prepare(`DELETE FROM mutes WHERE user_id=?`).run(u.id);
+
       const msg = `Đã unmute ${u.username}.`;
-      db.prepare(`INSERT INTO messages(room,user_id,username,content,created_at) VALUES(?,?,?,?,?)`)
+      const ins = db.prepare(`INSERT INTO messages(room,user_id,username,content,created_at) VALUES(?,?,?,?,?)`)
         .run(room, "system", "SYSTEM", msg, now());
-      broadcast(room, { t: now(), username:"SYSTEM", content: msg });
-      return res.json({ ok:true, cmd:true });
+      broadcast(room, { type: "msg", id: Number(ins.lastInsertRowid), created_at: now(), username: "SYSTEM", content: msg });
+      return res.json({ ok: true, cmd: true });
     }
 
     if (cmd === "?ban") {
-      const ua = req.headers["user-agent"] || "";
+      const ua = String(req.headers["user-agent"] || "").slice(0, 200);
       db.prepare(`
         INSERT INTO bans(user_id,reason,banned_until,ban_ua,created_at) VALUES(?,?,?,?,?)
         ON CONFLICT(user_id) DO UPDATE SET reason=excluded.reason, banned_until=excluded.banned_until, ban_ua=excluded.ban_ua
-      `).run(u.id, "banned", null, String(ua).slice(0, 200), now());
+      `).run(u.id, "banned", null, ua, now());
 
       db.prepare(`DELETE FROM sessions WHERE user_id=?`).run(u.id);
 
       const msg = `Đã ban ${u.username}.`;
-      db.prepare(`INSERT INTO messages(room,user_id,username,content,created_at) VALUES(?,?,?,?,?)`)
+      const ins = db.prepare(`INSERT INTO messages(room,user_id,username,content,created_at) VALUES(?,?,?,?,?)`)
         .run(room, "system", "SYSTEM", msg, now());
-      broadcast(room, { t: now(), username:"SYSTEM", content: msg });
-      return res.json({ ok:true, cmd:true });
+      broadcast(room, { type: "msg", id: Number(ins.lastInsertRowid), created_at: now(), username: "SYSTEM", content: msg });
+      return res.json({ ok: true, cmd: true });
     }
 
     if (cmd === "?unban") {
       db.prepare(`DELETE FROM bans WHERE user_id=?`).run(u.id);
+
       const msg = `Đã unban ${u.username}.`;
-      db.prepare(`INSERT INTO messages(room,user_id,username,content,created_at) VALUES(?,?,?,?,?)`)
+      const ins = db.prepare(`INSERT INTO messages(room,user_id,username,content,created_at) VALUES(?,?,?,?,?)`)
         .run(room, "system", "SYSTEM", msg, now());
-      broadcast(room, { t: now(), username:"SYSTEM", content: msg });
-      return res.json({ ok:true, cmd:true });
+      broadcast(room, { type: "msg", id: Number(ins.lastInsertRowid), created_at: now(), username: "SYSTEM", content: msg });
+      return res.json({ ok: true, cmd: true });
     }
 
-    return res.json({ ok:true, cmd:true });
+    return res.json({ ok: true, cmd: true });
   }
 
-  db.prepare(`INSERT INTO messages(room,user_id,username,content,created_at) VALUES(?,?,?,?,?)`)
-    .run(room, me.userId, me.username, content, now());
+  const created_at = now();
+  const ins = db.prepare(`INSERT INTO messages(room,user_id,username,content,created_at) VALUES(?,?,?,?,?)`)
+    .run(room, me.userId, me.username, content, created_at);
 
-  broadcast(room, { t: now(), username: me.username, content });
-  res.json({ ok:true });
+  const id = Number(ins.lastInsertRowid);
+  broadcast(room, { type: "msg", id, created_at, username: me.username, content });
+  res.json({ ok: true, id });
 });
 
 app.get("/api/room/:room/poll", (req, res) => {
   const me = getAuth(req);
-  if (!me) return res.status(401).json({ ok:false, err:"no-auth" });
+  if (!me) return res.status(401).json({ ok: false, err: "no-auth" });
 
-  const room = String(req.params.room || "global");
+  const room = String(req.params.room || "global").slice(0, 32);
   const since = parseInt(String(req.query.since || "0"), 10) || 0;
 
   const rows = db.prepare(`
@@ -252,40 +292,36 @@ app.get("/api/room/:room/poll", (req, res) => {
   `).all(room, since);
 
   const last = rows.length ? rows[rows.length - 1].created_at : since;
-  res.json({ ok:true, messages: rows, last });
+  res.json({ ok: true, messages: rows, last });
 });
 
-// backup db file (owner)
 app.get("/api/owner/download-db", (req, res) => {
   const me = getAuth(req);
-  if (!me || me.role !== "owner") return res.status(403).json({ ok:false });
+  if (!me || me.role !== "owner") return res.status(403).json({ ok: false, err: "no-perm" });
 
   const p = process.env.DB_PATH || "./data.sqlite";
-  if (!fs.existsSync(p)) return res.status(404).json({ ok:false, err:"no-db" });
+  if (!fs.existsSync(p)) return res.status(404).json({ ok: false, err: "no-db" });
   res.download(p, "chat_data.sqlite");
 });
 
-// restore db file: POST raw base64 (owner)
 app.post("/api/owner/upload-db", (req, res) => {
   const me = getAuth(req);
-  if (!me || me.role !== "owner") return res.status(403).json({ ok:false });
+  if (!me || me.role !== "owner") return res.status(403).json({ ok: false, err: "no-perm" });
 
   const b64 = String(req.body?.b64 || "");
-  if (!b64) return res.status(400).json({ ok:false, err:"no-b64" });
+  if (!b64) return res.status(400).json({ ok: false, err: "no-b64" });
 
   const buf = Buffer.from(b64, "base64");
   const p = process.env.DB_PATH || "./data.sqlite";
   fs.writeFileSync(p, buf);
-  res.json({ ok:true, note:"Restart service to use new db." });
+  res.json({ ok: true });
 });
 
-// static UI
 app.use(express.static(path.join(__dirname, "public")));
 
 const PORT = parseInt(process.env.PORT || "10000", 10);
-const server = app.listen(PORT, () => console.log("listening", PORT));
+const server = app.listen(PORT);
 
-// ws server
 const wss = new WebSocketServer({ server, path: "/ws" });
 
 wss.on("connection", (ws, req) => {
@@ -293,16 +329,17 @@ wss.on("connection", (ws, req) => {
   const room = (u.searchParams.get("room") || "global").slice(0, 32);
   const token = u.searchParams.get("token") || "";
 
-  // auth token
   const row = db.prepare(`
-    SELECT s.user_id as userId, s.expires_at as exp, u.username as username, u.role as role
-    FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=?
+    SELECT s.user_id as userId, s.expires_at as exp
+    FROM sessions s
+    WHERE s.token=?
   `).get(token);
 
   if (!row || row.exp <= now()) {
     try { ws.close(); } catch {}
     return;
   }
+
   const ban = db.prepare(`SELECT banned_until FROM bans WHERE user_id=?`).get(row.userId);
   if (ban && (ban.banned_until == null || ban.banned_until > now())) {
     try { ws.close(); } catch {}
@@ -314,5 +351,5 @@ wss.on("connection", (ws, req) => {
 
   ws.on("close", () => set.delete(ws));
   ws.on("error", () => set.delete(ws));
-  ws.on("message", () => {}); // ignore
+  ws.on("message", () => {});
 });
