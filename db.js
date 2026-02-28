@@ -8,7 +8,6 @@ export function openDB(path = process.env.DB_PATH || "./data.sqlite") {
       id TEXT PRIMARY KEY,
       username TEXT UNIQUE NOT NULL,
       pass_hash TEXT,
-      role TEXT NOT NULL DEFAULT 'user',
       created_at INTEGER NOT NULL
     );
 
@@ -19,11 +18,16 @@ export function openDB(path = process.env.DB_PATH || "./data.sqlite") {
       created_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS devices(
+      device_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS bans(
       user_id TEXT PRIMARY KEY,
       reason TEXT,
       banned_until INTEGER,
-      ban_ua TEXT,
       created_at INTEGER NOT NULL
     );
 
@@ -51,7 +55,21 @@ export function openDB(path = process.env.DB_PATH || "./data.sqlite") {
       pinned_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS roles(
+      name TEXT PRIMARY KEY,
+      perms TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS user_roles(
+      user_id TEXT NOT NULL,
+      role_name TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, role_name)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_msg_room_time ON messages(room, created_at);
+    CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id);
   `);
   return db;
 }
